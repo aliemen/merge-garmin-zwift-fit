@@ -2,7 +2,9 @@
 
 # merge-activity
 
-Merge a Zwift `.fit` file with a Garmin `.fit` file into a single, complete virtual ride.
+Merge a Zwift `.fit` file with a Garmin `.fit` file into a single, complete virtual ride. If you tested it with your device and notice something missing, feel free to create an issue. 
+
+> Also note that most of this code is AI generated, so I don't claim good code quality. I made this little tool just for personal use. However, since it work just fine for my usecase, I thought why not publish it and make it available for others in the same situation as me. 
 
 ## Why
 
@@ -11,7 +13,9 @@ If you ride indoors on Zwift while wearing a Garmin watch and a power meter / HR
 - **Zwift** captures your virtual GPS track, in-game distance, virtual elevation, speed, and the lap structure from in-game segments / events.
 - **Garmin** captures your real heart rate, power, pedal dynamics (left/right balance, torque effectiveness, pedal smoothness, power phase, PCO), respiration rate, training effect, and a long list of proprietary metrics the watch firmware computes on the fly (Body Battery delta, Performance Condition, Stamina, sweat loss, …).
 
-Neither file alone tells the full story. Garmin Connect shows your physiology but no map and no Zwift laps. Strava shows the Zwift world but flat HR / no power-meter accuracy / no pedal dynamics. `merge-activity` produces a single `.fit` that any platform (Garmin Connect, Strava, TrainingPeaks, intervals.icu, …) reads as one rich virtual activity.
+Neither file alone tells the full story. Garmin Connect shows your physiology but no map and no Zwift laps. Strava shows the Zwift world but flat HR / no power-meter accuracy / no pedal dynamics. `merge-activity` produces a single `.fit` that any platform (Garmin Connect, Strava, TrainingPeaks, intervals.icu, …) reads as one rich virtual activity. 
+
+All of the other tools I found online are either Strava specific, cost money, are missing features (like cycling dynamics) or are way too complicated.
 
 ## What it does
 
