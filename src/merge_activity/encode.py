@@ -88,19 +88,13 @@ def _profile_patched_with(definitions):
 def _proprietary_passthrough(enc, garmin_messages, injected_nums):
     """Write Garmin's proprietary messages (Performance Condition, Body
     Battery, Stamina, sweat-loss summary, etc.) using the synthesized Profile
-    entries. The decoder stored their fields under the integer-keyed `str(num)`
-    bucket; we rename those keys to match the synthesized field_<id> names."""
+    entries — these had no Profile entry at all before patching, so the
+    decoder bucketed them under stringified-int keys (e.g. `'140'`)."""
     written = 0
     for num in injected_nums:
         for src in garmin_messages.get(str(num)) or []:
-            payload = {f"field_{k}": v for k, v in src.items()}
-            try:
-                enc.write_mesg({"mesg_num": num, **payload})
+            if _try_write(enc, num, src):
                 written += 1
-            except Exception:
-                # If a single proprietary message fails (rare), skip it
-                # rather than fail the whole merge.
-                pass
     return written
 
 # Garmin auxiliary messages that we pass through verbatim. Without these,
@@ -158,23 +152,24 @@ def _zwift_device_info(zwift_messages):
     }
 
 
-def _events(merged_records):
-    if not merged_records:
-        return []
-    return [
-        {
-            "timestamp": merged_records[0]["timestamp"],
-            "event": "timer",
-            "event_type": "start",
-            "event_group": 0,
-        },
-        {
-            "timestamp": merged_records[-1]["timestamp"],
-            "event": "timer",
-            "event_type": "stop_all",
-            "event_group": 0,
-        },
-    ]
+def _split_events(garmin_events):
+    """Split Garmin's event stream into pre-record (timer start) and
+    post-record (everything else: timer stop, rider_position_change,
+    rear_gear_change, etc.). Most events are markers with timestamps tied to
+    a specific moment; FIT readers don't enforce strict positioning relative
+    to records, so emitting them in a clump after the records is fine.
+
+    These events drive the rider-position graph, gear-shift markers, and
+    similar Garmin Connect visualizations — without them, those panels stay
+    empty even if the per-record data is intact.
+    """
+    pre, post = [], []
+    for ev in garmin_events or []:
+        if ev.get("event") == "timer" and ev.get("event_type") == "start":
+            pre.append(ev)
+        else:
+            post.append(ev)
+    return pre, post
 
 
 def _activity(session_mesg):
@@ -190,21 +185,55 @@ def _activity(session_mesg):
     }
 
 
+def _is_nan(x):
+    return isinstance(x, float) and x != x
+
+
+def _clean_for_encode(mesg):
+    """Prepare ANY decoded message for the Encoder:
+    - Rename integer-keyed proprietary fields to `field_<id>` strings (matches
+      the augmented Profile entries we install in `_profile_patched_with`).
+      Without this, fields like the 6-byte `field_29` device identifier on
+      HRM device_info messages (used by Garmin Connect for accessory
+      recognition) — and the `rider_position_change` event payload — get
+      silently dropped.
+    - Drop NaN values (Encoder rejects them).
+    - Drop the `developer_fields` blob (handled separately by the Encoder).
+    """
+    out = {}
+    for k, v in mesg.items():
+        if k == "developer_fields":
+            continue
+        if _is_nan(v):
+            continue
+        if isinstance(v, list) and any(_is_nan(x) for x in v):
+            v = [x for x in v if not _is_nan(x)]
+            if not v:
+                continue
+        if isinstance(k, int):
+            out[f"field_{k}"] = v
+        else:
+            out[k] = v
+    return out
+
+
 def _try_write(enc, mesg_num, payload):
-    """Write a passthrough message, dropping unknown fields the Encoder may
-    choke on. The Encoder silently skips integer-keyed unknown fields, but
-    string-keyed sub-field expansions can still raise. Best-effort."""
+    """Write a passthrough message, cleaning it first. If even the cleaned
+    write fails (e.g. an event has an out-of-enum integer event-type that
+    refuses to encode), fall back to a Profile-name-only filter, then drop."""
+    cleaned = _clean_for_encode(payload)
     try:
-        enc.write_mesg({"mesg_num": mesg_num, **payload})
+        enc.write_mesg({"mesg_num": mesg_num, **cleaned})
+        return True
     except Exception:
-        # Strip anything that isn't a Profile-known base field for this mesg.
         fields = Profile["messages"].get(mesg_num, {}).get("fields", {})
         names = {f["name"] for f in fields.values()}
-        safe = {k: v for k, v in payload.items() if isinstance(k, str) and k in names}
+        safe = {k: v for k, v in cleaned.items() if isinstance(k, str) and k in names}
         try:
             enc.write_mesg({"mesg_num": mesg_num, **safe})
+            return True
         except Exception:
-            pass  # last resort: drop this one message
+            return False
 
 
 def write_fit(
@@ -250,12 +279,16 @@ def write_fit(
             for m in garmin_messages.get(key) or []:
                 _try_write(enc, N[name], m)
 
-        events = _events(merged_records)
-        if events:
-            enc.write_mesg({"mesg_num": N["EVENT"], **events[0]})
+        # Pass through Garmin's full event stream. Splitting timer-start out
+        # so it precedes the records (FIT convention). The rest — timer stop,
+        # rider_position_change, rear_gear_change, etc. — go after the
+        # records.
+        pre_events, post_events = _split_events(garmin_messages.get("event_mesgs"))
+        for ev in pre_events:
+            _try_write(enc, N["EVENT"], ev)
 
         for r in merged_records:
-            enc.write_mesg({"mesg_num": N["RECORD"], **r})
+            _try_write(enc, N["RECORD"], r)
 
         # Garmin's proprietary messages — written here, between records and
         # laps, so per-record proprietary streams (e.g. mesg 233, 1420 entries
@@ -263,7 +296,7 @@ def write_fit(
         n_prop = _proprietary_passthrough(enc, garmin_messages, injected)
 
         for lap in new_laps:
-            enc.write_mesg({"mesg_num": N["LAP"], **lap})
+            _try_write(enc, N["LAP"], lap)
 
         # Session-level time_in_zone (HR + power zone breakdown chart). Drop
         # lap-level entries — their `reference_index` points at Garmin's old
@@ -276,11 +309,11 @@ def write_fit(
         for h in garmin_messages.get("hrv_mesgs") or []:
             _try_write(enc, N["HRV"], h)
 
-        if events:
-            enc.write_mesg({"mesg_num": N["EVENT"], **events[1]})
+        for ev in post_events:
+            _try_write(enc, N["EVENT"], ev)
 
-        enc.write_mesg({"mesg_num": N["SESSION"], **new_session})
-        enc.write_mesg({"mesg_num": N["ACTIVITY"], **_activity(new_session)})
+        _try_write(enc, N["SESSION"], new_session)
+        _try_write(enc, N["ACTIVITY"], _activity(new_session))
 
         data = enc.close()
 
