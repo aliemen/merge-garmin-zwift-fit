@@ -131,14 +131,68 @@ def _maxv(records, field):
     return max(vals) if vals else None
 
 
-def build_laps(zwift_laps, merged_records, zwift_offset_s):
-    """Use Zwift's lap structure (positions, distance, ascent), but recompute
-    HR / power / cadence / pedal-dynamics aggregates from the merged record
-    slice belonging to each lap window."""
+def _position_partition(records, garmin_events):
+    """Walk the rider_position_change events alongside the records to tag
+    each record as 'seated' or 'standing'. Default 'seated' before the first
+    event. Returns (seated_records, standing_records)."""
+    pos_events = sorted(
+        [e for e in (garmin_events or [])
+         if e.get("event") == "rider_position_change"],
+        key=lambda e: e["timestamp"],
+    )
+    seated, standing = [], []
+    pos = "seated"
+    ev_idx = 0
+    for r in records:
+        while ev_idx < len(pos_events) and pos_events[ev_idx]["timestamp"] <= r["timestamp"]:
+            rp = str(pos_events[ev_idx].get("rider_position", "seated"))
+            pos = "standing" if "standing" in rp else "seated"
+            ev_idx += 1
+        (standing if pos == "standing" else seated).append(r)
+    return seated, standing
+
+
+def _best_garmin_lap_overlap(zlap_start, zlap_end, garmin_laps):
+    """Find the Garmin lap with the largest time overlap with [zlap_start, zlap_end]."""
+    best, best_overlap = None, 0.0
+    for gl in garmin_laps or []:
+        gs = gl.get("start_time")
+        if gs is None:
+            continue
+        ge = gs + timedelta(seconds=gl.get("total_elapsed_time") or 0)
+        overlap = max(0.0, (min(zlap_end, ge) - max(zlap_start, gs)).total_seconds())
+        if overlap > best_overlap:
+            best, best_overlap = gl, overlap
+    return best
+
+
+def build_laps(zwift_laps, merged_records, zwift_offset_s,
+               garmin_laps=None, garmin_events=None, garmin_session=None):
+    """Use Zwift's lap structure but populate every Garmin Connect lap-summary
+    column we can:
+
+    - HR / power / NP / cadence / torque-effectiveness / pedal-smoothness /
+      left-right-balance / pco / temperature / respiration / fractional-cadence /
+      total_cycles / total_work — recomputed from records inside the lap window.
+    - total_calories — scaled from session.total_calories by the lap's share
+      of session.total_work (Garmin's own algorithm uses HR + power + user
+      profile; this is a close proxy).
+    - time_standing / stand_count / avg_power_position / max_power_position /
+      avg_cadence_position / max_cadence_position — derived by partitioning
+      records by rider position from the rider_position_change events.
+    - avg_left_power_phase / avg_left_power_phase_peak / right counterparts —
+      4-element arrays whose [length, peak_position] indices are computed by
+      Garmin's device-side firmware and aren't derivable from records (records
+      only carry the 2-element [start, end] form). Copied from the Garmin lap
+      with the largest time overlap.
+    - Garmin lap proprietary integer-keyed fields (97, 145, 155, …) — passed
+      through from the overlapping Garmin lap.
+    """
+    session_calories = (garmin_session or {}).get("total_calories") or 0
+    session_work = (garmin_session or {}).get("total_work") or 0
+
     new_laps = []
     for i, zlap in enumerate(zwift_laps):
-        # Translate Zwift lap times into the merged-record time frame (which
-        # is Garmin's clock — same as the merged records' timestamps).
         gstart = zlap["start_time"] + timedelta(seconds=zwift_offset_s)
         elapsed = zlap.get("total_elapsed_time") or 0
         gend = gstart + timedelta(seconds=elapsed)
@@ -179,16 +233,127 @@ def build_laps(zwift_laps, merged_records, zwift_offset_s):
             if acad is not None:
                 candidate["avg_cadence"] = int(round(acad))
                 candidate["max_cadence"] = _maxv(slc, "cadence")
-            for k_in, k_out in (
-                ("left_torque_effectiveness", "avg_left_torque_effectiveness"),
-                ("right_torque_effectiveness", "avg_right_torque_effectiveness"),
-                ("left_pedal_smoothness", "avg_left_pedal_smoothness"),
-                ("right_pedal_smoothness", "avg_right_pedal_smoothness"),
-                ("left_right_balance", "avg_left_right_balance"),
+
+            # Pedal dynamics + L/R balance + PCO — averages from records.
+            for k_in, k_out, as_int in (
+                ("left_torque_effectiveness", "avg_left_torque_effectiveness", False),
+                ("right_torque_effectiveness", "avg_right_torque_effectiveness", False),
+                ("left_pedal_smoothness", "avg_left_pedal_smoothness", False),
+                ("right_pedal_smoothness", "avg_right_pedal_smoothness", False),
+                ("left_right_balance", "avg_left_right_balance", True),
+                ("left_pco", "avg_left_pco", True),
+                ("right_pco", "avg_right_pco", True),
             ):
                 v = _avg(slc, k_in)
-                if v is not None and k_out in _LAP_BASE_FIELDS:
-                    candidate[k_out] = v
+                if v is not None:
+                    candidate[k_out] = int(round(v)) if as_int else v
+
+            # Temperature.
+            temps = [r["temperature"] for r in slc if r.get("temperature") is not None]
+            if temps:
+                candidate["avg_temperature"] = int(round(sum(temps) / len(temps)))
+                candidate["max_temperature"] = max(temps)
+                candidate["min_temperature"] = min(temps)
+
+            # Respiration rate.
+            resp = [r["enhanced_respiration_rate"] for r in slc
+                    if r.get("enhanced_respiration_rate") is not None]
+            if resp:
+                candidate["enhanced_avg_respiration_rate"] = sum(resp) / len(resp)
+                candidate["enhanced_max_respiration_rate"] = max(resp)
+                candidate["enhanced_min_respiration_rate"] = min(resp)
+
+            # Fractional cadence.
+            fracs = [r["fractional_cadence"] for r in slc
+                     if r.get("fractional_cadence") is not None]
+            if fracs:
+                candidate["avg_fractional_cadence"] = sum(fracs) / len(fracs)
+                candidate["max_fractional_cadence"] = max(fracs)
+
+            # total_cycles ≈ Σ cadence (rev/min) × dt(=1s) / 60.
+            total_cycles = sum((r.get("cadence") or 0) for r in slc) / 60.0
+            if total_cycles > 0:
+                candidate["total_cycles"] = int(round(total_cycles))
+                candidate["total_strokes"] = int(round(total_cycles))
+
+            # total_work in J (W × s with 1 Hz records).
+            total_work = sum(r["power"] for r in slc if r.get("power") is not None)
+            if total_work > 0:
+                candidate["total_work"] = int(total_work)
+
+            # Per-lap ascent/descent from altitude deltas. Zwift fills these
+            # at the session level only — per-lap values come back as 0 — so
+            # we derive them from the (Zwift) altitude layered into records.
+            alts = [r.get("enhanced_altitude") if r.get("enhanced_altitude") is not None
+                    else r.get("altitude") for r in slc]
+            alts = [a for a in alts if a is not None]
+            if len(alts) >= 2:
+                ascent = descent = 0.0
+                for j in range(1, len(alts)):
+                    d = alts[j] - alts[j - 1]
+                    if d > 0:
+                        ascent += d
+                    else:
+                        descent -= d
+                if ascent > 0:
+                    candidate["total_ascent"] = int(round(ascent))
+                if descent > 0:
+                    candidate["total_descent"] = int(round(descent))
+
+            # total_calories — proxy: session calories * lap's share of session work.
+            if session_calories and session_work and total_work:
+                candidate["total_calories"] = int(round(
+                    session_calories * total_work / session_work
+                ))
+
+            # Rider-position-derived fields.
+            seated, standing = _position_partition(slc, garmin_events)
+            s_pwr = [r["power"] for r in seated if r.get("power") is not None]
+            t_pwr = [r["power"] for r in standing if r.get("power") is not None]
+            s_cad = [r["cadence"] for r in seated if r.get("cadence") is not None]
+            t_cad = [r["cadence"] for r in standing if r.get("cadence") is not None]
+
+            if s_pwr or t_pwr:
+                candidate["avg_power_position"] = [
+                    int(round(sum(s_pwr) / len(s_pwr))) if s_pwr else None,
+                    int(round(sum(t_pwr) / len(t_pwr))) if t_pwr else None,
+                ]
+                candidate["max_power_position"] = [
+                    max(s_pwr) if s_pwr else None,
+                    max(t_pwr) if t_pwr else None,
+                ]
+            if s_cad or t_cad:
+                candidate["avg_cadence_position"] = [
+                    int(round(sum(s_cad) / len(s_cad))) if s_cad else None,
+                    int(round(sum(t_cad) / len(t_cad))) if t_cad else None,
+                ]
+                candidate["max_cadence_position"] = [
+                    max(s_cad) if s_cad else None,
+                    max(t_cad) if t_cad else None,
+                ]
+            # 1 Hz records → 1 second per record in `standing`.
+            candidate["time_standing"] = float(len(standing))
+            stand_count = sum(
+                1 for ev in (garmin_events or [])
+                if ev.get("event") == "rider_position_change"
+                and gstart <= ev["timestamp"] < gend
+                and "standing" in str(ev.get("rider_position", ""))
+            )
+            if stand_count:
+                candidate["stand_count"] = stand_count
+
+        # Copy 4-element pedal-phase aggregates + lap-level proprietary fields
+        # from the Garmin lap with the largest time overlap.
+        gl = _best_garmin_lap_overlap(gstart, gend, garmin_laps)
+        if gl:
+            for k in ("avg_left_power_phase", "avg_left_power_phase_peak",
+                      "avg_right_power_phase", "avg_right_power_phase_peak"):
+                v = gl.get(k)
+                if v is not None:
+                    candidate[k] = v
+            for k, v in gl.items():
+                if isinstance(k, int):
+                    candidate[k] = v
 
         new_laps.append(_filter_known(candidate, _LAP_BASE_FIELDS))
     return new_laps

@@ -73,7 +73,12 @@ def main(argv=None):
     print(f"zwift offset: {offset:+.0f}s  confidence={conf:.2f}  via={source}")
 
     merged = merge_records(g_records, z_records, offset)
-    new_laps = build_laps(z_laps, merged, offset)
+    new_laps = build_laps(
+        z_laps, merged, offset,
+        garmin_laps=garmin.get("lap_mesgs"),
+        garmin_events=garmin.get("event_mesgs"),
+        garmin_session=g_session,
+    )
     new_session = build_session(g_session, z_session, merged, new_laps, offset)
 
     serial_override = secrets.randbits(32) if args.randomize_id else None
