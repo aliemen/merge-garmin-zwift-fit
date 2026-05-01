@@ -8,3 +8,9 @@ build/
 dist/
 .pytest_cache/
 *.pyc
+
+# Personal .fit fixtures used by the integration test (see tests/README.md).
+# Activity files contain user_profile (weight, height, gender, resting HR,
+# FTP, max HR), device serials, and a per-second HR/power timeline — keep
+# them local.
+tests/*.fit
