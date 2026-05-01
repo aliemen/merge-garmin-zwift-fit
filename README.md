@@ -37,8 +37,8 @@ Requires Python 3.10+. Runtime deps: [`garmin-fit-sdk`](https://pypi.org/project
 
 ```bash
 merge-activity \
-    --garmin Garmin_22716924242_ACTIVITY.fit \
-    --zwift Zwift_2026-04-30-19-50-07.fit \
+    --garmin G.fit \
+    --zwift Z.fit \
     --output merged.fit
 ```
 
@@ -84,30 +84,30 @@ Garmin's `record_mesgs` define the master timeline. For each Garmin timestamp th
 
 ### Per-lap rebuild
 
-Zwift's lap structure wins (typical case: you use in-game lap markers, segment events, or workout intervals — much more useful than Garmin's auto-laps). For each Zwift lap the tool slices the merged record stream by the lap's time window and recomputes:
+Zwift's lap structure wins (typical case: you use in-game lap markers, segment events, or workout intervals, much more useful than Garmin's auto-laps if not set yourself). For each Zwift lap the tool slices the merged record stream by the lap's time window and recomputes:
 
 - HR / power / NP / cadence (avg / max), torque-effectiveness, pedal-smoothness, L/R balance, PCO, temperature (avg/max/min), respiration (avg/max/min), fractional cadence, total cycles, total work,
 - `total_calories` proxied from `session.total_calories × lap_work / session.total_work` (Garmin's actual algorithm uses HR + power + user profile; the proxy adds up to the session total within rounding),
-- `total_ascent` / `total_descent` from positive / negative altitude deltas across the lap's records — Zwift fills these only at the session level and leaves per-lap values at zero,
+- `total_ascent` / `total_descent` from positive / negative altitude deltas across the lap's records. Zwift fills these only at the session level and leaves per-lap values at zero,
 - `time_standing`, `stand_count`, `avg_power_position`, `max_power_position`, `avg_cadence_position`, `max_cadence_position` derived by walking the `rider_position_change` events alongside the records to tag each record seated or standing.
 
-The 4-element `avg_left_power_phase` / `avg_left_power_phase_peak` arrays (and right counterparts) carry [start_angle, end_angle, length, peak_position]. Records only carry the 2-element [start, end] form — Garmin's device-side firmware computes the length and peak position from a finer-grained model that's not exposed in the FIT record stream. These four fields are copied from the Garmin lap with the largest time overlap with the current Zwift lap.
+The 4-element `avg_left_power_phase` / `avg_left_power_phase_peak` arrays (and right counterparts) carry [start_angle, end_angle, length, peak_position]. Records only carry the 2-element [start, end] form. Garmin's device-side firmware computes the length and peak position from a finer-grained model that's not exposed in the FIT record stream. These four fields are copied from the Garmin lap with the largest time overlap with the current Zwift lap.
 
 ### Garmin's proprietary message types
 
 This is the part that took the longest to get right. Garmin smuggles a lot of data into FIT files in two places:
 
-1. **Whole message types not in the public Profile** — for the test fixture there were 12 such mesg_nums (140, 141, 147, 233, 288, 326, 327, 394, 22, 79, 104, 113) carrying things like the post-activity summary, per-second Body Battery / Performance Condition / Stamina, gear-shift records, and so on. Mesg 233 alone has 1420 entries (one per record).
-2. **Integer-keyed extension fields inside otherwise-standard messages** — `session.field_178 = 373` is the sweat loss in mL; `session.fields 205-216` are Performance Condition / Stamina averages; `record.fields 134-144` are per-second Body Battery / Performance Condition / Stamina; `device_info.field_29` is a 6-byte device identifier Garmin Connect uses for accessory recognition.
+1. **Whole message types not in the public Profile**: for the test fixture there were 12 such mesg_nums (140, 141, 147, 233, 288, 326, 327, 394, 22, 79, 104, 113) carrying things like the post-activity summary, per-second Body Battery / Performance Condition / Stamina, gear-shift records, and so on. Mesg 233 alone has 1420 entries (one per record).
+2. **Integer-keyed extension fields inside otherwise-standard messages**: `session.field_178 = 373` is the sweat loss in mL; `session.fields 205-216` are Performance Condition / Stamina averages; `record.fields 134-144` are per-second Body Battery / Performance Condition / Stamina; `device_info.field_29` is a 6-byte device identifier Garmin Connect uses for accessory recognition.
 
 The official `garmin-fit-sdk` Python encoder rejects any message whose `mesg_num` isn't in its bundled Profile, and silently drops any field whose name isn't in the Profile entry for that message. Both classes of data would be lost without intervention.
 
-The trick: every FIT file embeds the byte layout of every message type it uses (it has to — that's how a generic decoder reads manufacturer-specific data). The `garmin-fit-sdk` Decoder exposes those embedded definitions through a `mesg_definition_listener` callback. `merge-activity` captures them during decode, then for every captured definition either:
+The trick: every FIT file embeds the byte layout of every message type it uses (it has to, that's how a generic decoder reads manufacturer-specific data). The `garmin-fit-sdk` Decoder exposes those embedded definitions through a `mesg_definition_listener` callback. `merge-activity` captures them during decode, then for every captured definition either:
 
 - synthesizes a complete Profile entry (for fully-unknown mesg_nums), or
 - adds the proprietary fields to the existing Profile entry (for record / session / lap / device_info)
 
-with synthetic `field_<id>` names, FIT base types translated into the SDK's string-named base types, and array vs. scalar inferred from `num_field_elements`. The augmented Profile is installed via a context manager that restores it on exit. Integer-keyed fields in decoded messages are renamed to `field_<id>` strings to match. The encoder then writes everything through. After re-decoding, integer keys come back as integers because downstream tools have no knowledge of our synthetic names — they just read the embedded definitions out of the file.
+with synthetic `field_<id>` names, FIT base types translated into the SDK's string-named base types, and array vs. scalar inferred from `num_field_elements`. The augmented Profile is installed via a context manager that restores it on exit. Integer-keyed fields in decoded messages are renamed to `field_<id>` strings to match. The encoder then writes everything through. After re-decoding, integer keys come back as integers because downstream tools have no knowledge of our synthetic names, they just read the embedded definitions out of the file.
 
 See [src/merge_activity/encode.py](src/merge_activity/encode.py) `_profile_patched_with`.
 
@@ -190,6 +190,3 @@ src/merge_activity/
 - The official [garmin-fit-sdk](https://github.com/garmin/fit-python-sdk) for decoding and (with some help) encoding.
 - The FIT file format itself, which makes this kind of round-tripping possible because every file embeds its own message definitions.
 
-## License
-
-MIT — see [LICENSE](LICENSE).
