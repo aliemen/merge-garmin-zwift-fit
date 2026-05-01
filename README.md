@@ -1,3 +1,5 @@
+[![Latest Release](https://img.shields.io/github/v/release/aliemen/merge-garmin-zwift-fit?style=flat-square)](https://github.com/aliemen/merge-garmin-zwift-fit/releases/latest)
+
 # merge-activity
 
 Merge a Zwift `.fit` file with a Garmin `.fit` file into a single, complete virtual ride.
@@ -24,14 +26,23 @@ The Garmin file is the **master timeline**. The merged file:
 
 ## Install
 
+Just install the latest release into a virtualenv:
+
 ```bash
-git clone https://github.com/aliemen/merge-garmin-zwift-fit.git merge-activity
+python -m venv .venv && source .venv/bin/activate
+pip install git+https://github.com/aliemen/merge-garmin-zwift-fit.git@v1.0.0
+```
+
+Or clone the release tag if you want to hack on it:
+
+```bash
+git clone --branch v1.0.0 --depth 1 https://github.com/aliemen/merge-garmin-zwift-fit.git merge-activity
 cd merge-activity
 python -m venv .venv && source .venv/bin/activate
 pip install -e .
 ```
 
-Requires Python 3.10+. Runtime deps: [`garmin-fit-sdk`](https://pypi.org/project/garmin-fit-sdk/) (Apache 2.0, official Garmin Python SDK) and [`numpy`](https://pypi.org/project/numpy/).
+Replace `v1.0.0` with whichever tag from the [releases page](https://github.com/aliemen/merge-garmin-zwift-fit/releases) you want. Requires Python 3.10+. Runtime deps: [`garmin-fit-sdk`](https://pypi.org/project/garmin-fit-sdk/) (Apache 2.0, official Garmin Python SDK) and [`numpy`](https://pypi.org/project/numpy/).
 
 ## Usage
 
@@ -189,4 +200,8 @@ src/merge_activity/
 
 - The official [garmin-fit-sdk](https://github.com/garmin/fit-python-sdk) for decoding and (with some help) encoding.
 - The FIT file format itself, which makes this kind of round-tripping possible because every file embeds its own message definitions.
+
+## License
+
+GPL-3.0-or-later — see [LICENSE](LICENSE).
 

@@ -2,6 +2,7 @@ import argparse
 import secrets
 import sys
 
+from . import __version__
 from .align import estimate_offset
 from .decode import decode_fit
 from .encode import write_fit
@@ -19,6 +20,7 @@ def main(argv=None):
         prog="merge-activity",
         description="Merge a Zwift .fit file (virtual GPS / laps) into a Garmin .fit file (HR / power / pedal dynamics).",
     )
+    p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     p.add_argument("--garmin", required=True, help="Garmin activity .fit file")
     p.add_argument("--zwift", required=True, help="Zwift activity .fit file")
     p.add_argument("-o", "--output", required=True, help="path for the merged .fit output")

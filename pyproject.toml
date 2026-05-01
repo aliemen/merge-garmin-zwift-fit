@@ -4,13 +4,37 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "merge-activity"
-version = "0.1.0"
+version = "1.0.0"
 description = "Merge a Zwift .fit file (virtual GPS/laps) and a Garmin .fit file (HR/power/pedal-dynamics) into a single virtual activity."
+readme = "README.md"
+license = { text = "GPL-3.0-or-later" }
+authors = [
+    { name = "Alexander Liemen" },
+]
 requires-python = ">=3.10"
 dependencies = [
     "garmin-fit-sdk>=21.158.0",
     "numpy>=1.24",
 ]
+keywords = ["fit", "garmin", "zwift", "cycling", "fitness", "merge", "indoor-cycling"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Utilities",
+]
+
+[project.urls]
+Homepage = "https://github.com/aliemen/merge-garmin-zwift-fit"
+Repository = "https://github.com/aliemen/merge-garmin-zwift-fit"
+Issues = "https://github.com/aliemen/merge-garmin-zwift-fit/issues"
 
 [project.optional-dependencies]
 dev = ["pytest>=7"]
