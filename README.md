@@ -25,7 +25,7 @@ The Garmin file is the **master timeline**. The merged file:
 ## Install
 
 ```bash
-git clone https://github.com/<you>/merge-activity.git
+git clone https://github.com/aliemen/merge-garmin-zwift-fit.git merge-activity
 cd merge-activity
 python -m venv .venv && source .venv/bin/activate
 pip install -e .
