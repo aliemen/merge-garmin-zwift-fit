@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "merge-activity"
+version = "0.1.0"
+description = "Merge a Zwift .fit file (virtual GPS/laps) and a Garmin .fit file (HR/power/pedal-dynamics) into a single virtual activity."
+requires-python = ">=3.10"
+dependencies = [
+    "garmin-fit-sdk>=21.158.0",
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+merge-activity = "merge_activity.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
